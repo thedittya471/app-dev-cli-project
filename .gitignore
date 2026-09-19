@@ -1,0 +1,9 @@
+node_modules/
+.DS_Store
+*.log
+
+# Keep local music and runtime state out of Git.
+music/*
+!music/.gitkeep
+data/*
+!data/.gitkeep

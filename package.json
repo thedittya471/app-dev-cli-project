@@ -1,0 +1,17 @@
+{
+  "name": "terminal-music-player",
+  "version": "0.1.0",
+  "description": "A simple terminal-based music player built with Node.js.",
+  "type": "module",
+  "bin": {
+    "music-player": "src/cli.js"
+  },
+  "scripts": {
+    "start": "node src/cli.js",
+    "dev": "node --watch src/cli.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "license": "MIT"
+}
