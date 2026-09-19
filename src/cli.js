@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
-import { getSongs } from "./library.js";
+import { getSongPath, getSongs } from "./library.js";
+import { playSong } from "./player.js";
 
 const commands = new Set([
   "list",
@@ -22,7 +23,7 @@ Usage:
 Commands:
   help      Show this help message
   list      List songs in the music library
-  play      Start playback
+  play      Play a song by list number or filename
   pause     Pause playback
   resume    Resume playback
   stop      Stop playback
@@ -57,6 +58,30 @@ async function main(argv) {
     return 0;
   }
 
+  if (command === "play") {
+    const selection = argv[3];
+
+    if (!selection) {
+      console.error("Usage: music-player play <number|filename>");
+      return 1;
+    }
+
+    const songs = await getSongs();
+    const song = /^\d+$/.test(selection)
+      ? songs[Number(selection) - 1]
+      : songs.find((name) => name === selection);
+
+    if (!song) {
+      console.error(`Song not found: ${selection}`);
+      return 1;
+    }
+
+    console.log(`Playing: ${song}`);
+    await playSong(getSongPath(song));
+    console.log(`Finished: ${song}`);
+    return 0;
+  }
+
   console.log(`The "${command}" command is not implemented yet.`);
   return 0;
 }
@@ -64,6 +89,6 @@ async function main(argv) {
 try {
   process.exitCode = await main(process.argv);
 } catch (error) {
-  console.error(`Unable to read the music library: ${error.message}`);
+  console.error(error.message);
   process.exitCode = 1;
 }
