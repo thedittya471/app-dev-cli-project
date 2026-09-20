@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { getSongPath, getSongs } from "./library.js";
+import { runInteractive } from "./interactive.js";
 import { pauseSong, resumeSong, startSong, stopSong } from "./player.js";
 import {
   clearState,
@@ -18,6 +19,7 @@ const commands = new Set([
   "next",
   "previous",
   "status",
+  "interactive",
 ]);
 
 const help = `
@@ -25,6 +27,7 @@ const help = `
 
 Usage:
   music-player <command>
+  music-player
 
 Commands:
   help      Show this help message
@@ -36,6 +39,7 @@ Commands:
   next      Play the next song
   previous  Play the previous song
   status    Show the current playback status
+  interactive  Open interactive mode
 `;
 
 async function waitForProcessExit(pid) {
@@ -108,7 +112,11 @@ async function playTrack(songs, currentIndex) {
 }
 
 async function main(argv) {
-  const command = argv[2] ?? "help";
+  const command = argv[2];
+
+  if (!command || command === "interactive") {
+    return runInteractive();
+  }
 
   if (command === "help") {
     console.log(help);
