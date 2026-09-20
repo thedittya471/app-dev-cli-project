@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 
 import { getSongPath, getSongs } from "./library.js";
-import { playSong } from "./player.js";
+import { startSong } from "./player.js";
+import { clearState, getActiveState, writeState } from "./state.js";
 
 const commands = new Set([
   "list",
@@ -76,9 +77,55 @@ async function main(argv) {
       return 1;
     }
 
+    const activeState = await getActiveState();
+
+    if (activeState) {
+      console.error(`Already playing: ${activeState.song}`);
+      return 1;
+    }
+
+    const { pid, completion } = await startSong(getSongPath(song));
+
+    await writeState({
+      pid,
+      currentIndex: songs.indexOf(song),
+      song,
+      status: "playing",
+      startedAt: new Date().toISOString(),
+    });
+
     console.log(`Playing: ${song}`);
-    await playSong(getSongPath(song));
-    console.log(`Finished: ${song}`);
+
+    try {
+      const playback = await completion;
+
+      if (playback.signal) {
+        throw new Error(`Playback was interrupted by ${playback.signal}.`);
+      }
+
+      if (playback.code !== 0) {
+        throw new Error(`Playback failed with exit code ${playback.code}.`);
+      }
+
+      console.log(`Finished: ${song}`);
+    } finally {
+      await clearState();
+    }
+
+    return 0;
+  }
+
+  if (command === "status") {
+    const state = await getActiveState();
+
+    if (!state) {
+      console.log("Nothing is currently playing.");
+      return 0;
+    }
+
+    console.log(`Status: ${state.status}`);
+    console.log(`Song: ${state.song}`);
+    console.log(`Process ID: ${state.pid}`);
     return 0;
   }
 

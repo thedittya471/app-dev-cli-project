@@ -12,7 +12,7 @@ function runFfplay(args) {
   });
 }
 
-export async function playSong(filePath) {
+export async function startSong(filePath) {
   let check;
 
   try {
@@ -29,19 +29,18 @@ export async function playSong(filePath) {
     throw new Error("ffplay is installed but failed its availability check.");
   }
 
-  let playback;
+  return new Promise((resolve, reject) => {
+    const child = spawn("ffplay", ["-nodisp", "-autoexit", filePath], {
+      shell: false,
+      stdio: "ignore",
+    });
+    const completion = new Promise((resolveCompletion) => {
+      child.once("close", (code, signal) => resolveCompletion({ code, signal }));
+    });
 
-  try {
-    playback = await runFfplay(["-nodisp", "-autoexit", filePath]);
-  } catch (error) {
-    throw new Error(`Unable to start playback: ${error.message}`);
-  }
-
-  if (playback.signal) {
-    throw new Error(`Playback was interrupted by ${playback.signal}.`);
-  }
-
-  if (playback.code !== 0) {
-    throw new Error(`Playback failed with exit code ${playback.code}.`);
-  }
+    child.once("error", (error) => {
+      reject(new Error(`Unable to start playback: ${error.message}`));
+    });
+    child.once("spawn", () => resolve({ pid: child.pid, completion }));
+  });
 }
