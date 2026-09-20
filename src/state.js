@@ -22,8 +22,17 @@ export async function writeState(state) {
   await rename(temporaryStateFile, stateFile);
 }
 
-export async function clearState() {
+export async function clearState(expectedPid) {
+  if (expectedPid !== undefined) {
+    const state = await readState();
+
+    if (state?.pid !== expectedPid) {
+      return false;
+    }
+  }
+
   await rm(stateFile, { force: true });
+  return true;
 }
 
 export function isProcessRunning(pid) {
@@ -47,7 +56,7 @@ export async function getActiveState() {
   }
 
   if (!isProcessRunning(state.pid)) {
-    await clearState();
+    await clearState(state.pid);
     return null;
   }
 

@@ -1,5 +1,7 @@
 import { spawn } from "node:child_process";
 
+const supportsPlaybackSignals = process.platform === "darwin" || process.platform === "linux";
+
 function runFfplay(args) {
   return new Promise((resolve, reject) => {
     const process = spawn("ffplay", args, {
@@ -43,4 +45,43 @@ export async function startSong(filePath) {
     });
     child.once("spawn", () => resolve({ pid: child.pid, completion }));
   });
+}
+
+function sendSignal(pid, signal) {
+  try {
+    process.kill(pid, signal);
+    return true;
+  } catch (error) {
+    if (error.code === "ESRCH") {
+      return false;
+    }
+
+    throw error;
+  }
+}
+
+function requirePlaybackSignals() {
+  if (!supportsPlaybackSignals) {
+    throw new Error("Pause and resume are supported only on macOS and Linux.");
+  }
+}
+
+export function pauseSong(pid) {
+  requirePlaybackSignals();
+  return sendSignal(pid, "SIGSTOP");
+}
+
+export function resumeSong(pid) {
+  requirePlaybackSignals();
+  return sendSignal(pid, "SIGCONT");
+}
+
+export function stopSong(pid, wasPaused = false) {
+  const stopped = sendSignal(pid, "SIGTERM");
+
+  if (stopped && wasPaused && supportsPlaybackSignals) {
+    sendSignal(pid, "SIGCONT");
+  }
+
+  return stopped;
 }
