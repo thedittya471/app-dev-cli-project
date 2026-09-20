@@ -4,6 +4,12 @@ import { getSongPath, getSongs } from "./library.js";
 import { runInteractive } from "./interactive.js";
 import { pauseSong, resumeSong, startSong, stopSong } from "./player.js";
 import {
+  addToPlaylist,
+  createPlaylist,
+  getPlaylist,
+  removeFromPlaylist,
+} from "./playlists.js";
+import {
   clearState,
   getActiveState,
   isProcessRunning,
@@ -20,6 +26,7 @@ const commands = new Set([
   "previous",
   "status",
   "interactive",
+  "playlist",
 ]);
 
 const help = `
@@ -40,6 +47,7 @@ Commands:
   previous  Play the previous song
   status    Show the current playback status
   interactive  Open interactive mode
+  playlist  Create and manage playlists
 `;
 
 async function waitForProcessExit(pid) {
@@ -65,7 +73,7 @@ async function stopPlayback(state) {
   return stopped;
 }
 
-async function playTrack(songs, currentIndex) {
+async function playTrack(songs, currentIndex, playlist) {
   const song = songs[currentIndex];
   const { pid, completion } = await startSong(getSongPath(song));
 
@@ -76,6 +84,7 @@ async function playTrack(songs, currentIndex) {
       song,
       status: "playing",
       startedAt: new Date().toISOString(),
+      ...(playlist ? { playlist } : {}),
     });
   } catch (error) {
     stopSong(pid);
@@ -109,6 +118,12 @@ async function playTrack(songs, currentIndex) {
       await clearState(pid);
     }
   }
+}
+
+function findSong(songs, selection) {
+  return /^\d+$/.test(selection)
+    ? songs[Number(selection) - 1]
+    : songs.find((song) => song === selection);
 }
 
 async function main(argv) {
@@ -150,9 +165,7 @@ async function main(argv) {
     }
 
     const songs = await getSongs();
-    const song = /^\d+$/.test(selection)
-      ? songs[Number(selection) - 1]
-      : songs.find((name) => name === selection);
+    const song = findSong(songs, selection);
 
     if (!song) {
       console.error(`Song not found: ${selection}`);
@@ -167,6 +180,97 @@ async function main(argv) {
     }
 
     return playTrack(songs, songs.indexOf(song));
+  }
+
+  if (command === "playlist") {
+    const action = argv[3];
+    const name = argv[4];
+
+    if (!action || !name) {
+      console.error("Usage: music-player playlist <create|add|show|play|remove> <name> [song]");
+      return 1;
+    }
+
+    const playlistName = name.trim();
+
+    if (action === "create") {
+      const playlist = await createPlaylist(playlistName);
+      console.log(`Created playlist: ${playlist}`);
+      return 0;
+    }
+
+    if (action === "add") {
+      const selection = argv[5];
+
+      if (!selection) {
+        console.error("Usage: music-player playlist add <name> <number|filename>");
+        return 1;
+      }
+
+      const songs = await getSongs();
+      const song = findSong(songs, selection);
+
+      if (!song) {
+        console.error(`Song not found: ${selection}`);
+        return 1;
+      }
+
+      await addToPlaylist(playlistName, song);
+      console.log(`Added to ${playlistName}: ${song}`);
+      return 0;
+    }
+
+    if (action === "show") {
+      const playlist = await getPlaylist(playlistName);
+
+      if (playlist.length === 0) {
+        console.log(`Playlist "${playlistName}" is empty.`);
+        return 0;
+      }
+
+      const availableSongs = new Set(await getSongs());
+      playlist.forEach((song, index) => {
+        console.log(`${index + 1}. ${song}${availableSongs.has(song) ? "" : " (missing)"}`);
+      });
+      return 0;
+    }
+
+    if (action === "play") {
+      const availableSongs = new Set(await getSongs());
+      const songs = (await getPlaylist(playlistName)).filter((song) =>
+        availableSongs.has(song),
+      );
+
+      if (songs.length === 0) {
+        console.log(`Playlist "${playlistName}" has no playable songs.`);
+        return 0;
+      }
+
+      const activeState = await getActiveState();
+
+      if (activeState) {
+        console.error(`Already playing: ${activeState.song}`);
+        return 1;
+      }
+
+      return playTrack(songs, 0, playlistName);
+    }
+
+    if (action === "remove") {
+      const position = argv[5];
+
+      if (!position) {
+        console.error("Usage: music-player playlist remove <name> <position>");
+        return 1;
+      }
+
+      const song = await removeFromPlaylist(playlistName, position);
+      console.log(`Removed from ${playlistName}: ${song}`);
+      return 0;
+    }
+
+    console.error(`Unknown playlist command: ${action}`);
+    return 1;
   }
 
   if (command === "status") {
@@ -235,9 +339,9 @@ async function main(argv) {
   }
 
   if (command === "next" || command === "previous") {
-    const songs = await getSongs();
+    const librarySongs = await getSongs();
 
-    if (songs.length === 0) {
+    if (librarySongs.length === 0) {
       console.log("No music files found.");
       return 0;
     }
@@ -249,12 +353,32 @@ async function main(argv) {
       return 0;
     }
 
-    const currentIndex = Number.isInteger(state.currentIndex) ? state.currentIndex : 0;
+    const availableSongs = new Set(librarySongs);
+    const songs = state.playlist
+      ? (await getPlaylist(state.playlist)).filter((song) => availableSongs.has(song))
+      : librarySongs;
+
+    if (songs.length === 0) {
+      console.log("No playable songs found.");
+      return 0;
+    }
+
     const offset = command === "next" ? 1 : -1;
-    const selectedIndex = (currentIndex + offset + songs.length) % songs.length;
+    let currentIndex = songs.indexOf(state.song);
+
+    if (currentIndex < 0) {
+      currentIndex = Number.isInteger(state.currentIndex)
+        ? state.currentIndex
+        : command === "next"
+          ? -1
+          : 0;
+    }
+
+    const selectedIndex =
+      ((currentIndex + offset) % songs.length + songs.length) % songs.length;
 
     await stopPlayback(state);
-    return playTrack(songs, selectedIndex);
+    return playTrack(songs, selectedIndex, state.playlist);
   }
 
   console.log(`The "${command}" command is not implemented yet.`);

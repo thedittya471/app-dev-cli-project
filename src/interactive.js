@@ -2,6 +2,13 @@ import readline from "node:readline";
 import { getSongPath, getSongs } from "./library.js";
 import { pauseSong, resumeSong, startSong, stopSong } from "./player.js";
 import {
+  addToPlaylist,
+  createPlaylist,
+  getPlaylist,
+  listPlaylists,
+  removeFromPlaylist,
+} from "./playlists.js";
+import {
   clearState,
   getActiveState,
   isProcessRunning,
@@ -28,13 +35,15 @@ export async function runInteractive() {
     throw new Error("Interactive mode requires a terminal.");
   }
 
-  const songs = await getSongs();
+  const librarySongs = await getSongs();
 
-  if (songs.length === 0) {
+  if (librarySongs.length === 0) {
     console.log("No music files found.");
     return 0;
   }
 
+  let songs = librarySongs;
+  let activePlaylist = null;
   let selectedIndex = 0;
   let message = "Ready";
   let busy = false;
@@ -43,6 +52,23 @@ export async function runInteractive() {
   const intentionalStops = new Set();
 
   const initialState = await getActiveState();
+
+  if (initialState?.playlist) {
+    try {
+      const availableSongs = new Set(librarySongs);
+      const playlistSongs = (await getPlaylist(initialState.playlist)).filter((song) =>
+        availableSongs.has(song),
+      );
+
+      if (playlistSongs.length > 0) {
+        songs = playlistSongs;
+        activePlaylist = initialState.playlist;
+      }
+    } catch (error) {
+      message = error.message;
+    }
+  }
+
   const initialIndex = initialState ? songs.indexOf(initialState.song) : -1;
 
   if (initialIndex >= 0) {
@@ -53,6 +79,10 @@ export async function runInteractive() {
     console.clear();
     console.log("🎵 Terminal Music Player\n");
 
+    if (activePlaylist) {
+      console.log(`Playlist: ${activePlaylist}\n`);
+    }
+
     songs.forEach((song, index) => {
       const isActive = state?.song === song;
       const marker = isActive ? (state.status === "paused" ? "⏸" : "▶") : " ";
@@ -60,7 +90,9 @@ export async function runInteractive() {
       console.log(`${cursor} ${marker} ${index + 1}. ${song}`);
     });
 
-    console.log("\n[p] Play/Pause  [n] Next  [b] Previous  [s] Stop  [q] Quit");
+    console.log(
+      "\n[p] Play/Pause  [n] Next  [b] Previous  [s] Stop  [l] Playlists  [q] Quit",
+    );
     console.log(`\n${message}`);
   }
 
@@ -79,6 +111,7 @@ export async function runInteractive() {
         song,
         status: "playing",
         startedAt: new Date().toISOString(),
+        ...(activePlaylist ? { playlist: activePlaylist } : {}),
       });
     } catch (error) {
       stopSong(pid);
@@ -105,12 +138,17 @@ export async function runInteractive() {
           code === 0 && !signal
             ? `Finished: ${song}`
             : `Playback ended${signal ? ` (${signal})` : ` with code ${code}`}.`;
-        await refresh();
+        if (!busy) {
+          await refresh();
+        }
       })
       .catch((error) => {
         if (!closing) {
           message = error.message;
-          void refresh();
+
+          if (!busy) {
+            void refresh();
+          }
         }
       });
   }
@@ -170,6 +208,127 @@ export async function runInteractive() {
     await startSelected();
   }
 
+  async function ask(question) {
+    process.stdin.setRawMode(false);
+    const prompt = readline.createInterface({ input: process.stdin, output: process.stdout });
+
+    try {
+      return (await new Promise((resolve) => prompt.question(question, resolve))).trim();
+    } finally {
+      prompt.close();
+      process.stdin.setRawMode(true);
+      process.stdin.resume();
+    }
+  }
+
+  function printPlaylists(playlists) {
+    if (playlists.length === 0) {
+      console.log("No playlists have been created yet.");
+      return;
+    }
+
+    playlists.forEach((playlist, index) => {
+      console.log(`${index + 1}. ${playlist.name} (${playlist.songs.length} songs)`);
+    });
+  }
+
+  async function choosePlaylist(playlists) {
+    if (playlists.length === 0) {
+      throw new Error("No playlists have been created yet.");
+    }
+
+    const selection = await ask("Playlist name or number: ");
+    const playlist = /^\d+$/.test(selection)
+      ? playlists[Number(selection) - 1]
+      : playlists.find((entry) => entry.name === selection);
+
+    if (!playlist) {
+      throw new Error(`Playlist not found: ${selection}`);
+    }
+
+    return playlist;
+  }
+
+  async function openPlaylistMenu() {
+    console.clear();
+    console.log("🎵 Playlists\n");
+    const playlists = await listPlaylists();
+    printPlaylists(playlists);
+    console.log(
+      "\n[c] Create  [a] Add selected song  [s] Show  [p] Play  [r] Remove entry  [u] Full library  [b] Back",
+    );
+
+    const action = (await ask("\nChoose an action: ")).toLowerCase();
+
+    if (action === "" || action === "b") {
+      return;
+    }
+
+    if (action === "c") {
+      const name = await ask("New playlist name: ");
+      const playlist = await createPlaylist(name);
+      message = `Created playlist: ${playlist}`;
+      return;
+    }
+
+    if (action === "u") {
+      const state = await getActiveState();
+      songs = librarySongs;
+      activePlaylist = null;
+      selectedIndex = Math.max(state ? songs.indexOf(state.song) : 0, 0);
+      message = "Using the full music library.";
+      return;
+    }
+
+    if (!["a", "s", "p", "r"].includes(action)) {
+      throw new Error(`Unknown playlist action: ${action}`);
+    }
+
+    const playlist = await choosePlaylist(playlists);
+
+    if (action === "a") {
+      const song = songs[selectedIndex];
+      await addToPlaylist(playlist.name, song);
+      message = `Added to ${playlist.name}: ${song}`;
+      return;
+    }
+
+    if (action === "s") {
+      const availableSongs = new Set(librarySongs);
+      const entries = playlist.songs.map(
+        (song, index) =>
+          `${index + 1}. ${song}${availableSongs.has(song) ? "" : " (missing)"}`,
+      );
+      message = entries.length > 0 ? `${playlist.name}:\n${entries.join("\n")}` : `${playlist.name} is empty.`;
+      return;
+    }
+
+    if (action === "r") {
+      if (playlist.songs.length === 0) {
+        throw new Error(`Playlist "${playlist.name}" is empty.`);
+      }
+
+      playlist.songs.forEach((song, index) => console.log(`${index + 1}. ${song}`));
+      const position = await ask("Entry number to remove: ");
+      const removed = await removeFromPlaylist(playlist.name, position);
+      message = `Removed from ${playlist.name}: ${removed}`;
+      return;
+    }
+
+    const availableSongs = new Set(librarySongs);
+    const playlistSongs = playlist.songs.filter((song) => availableSongs.has(song));
+
+    if (playlistSongs.length === 0) {
+      throw new Error(`Playlist "${playlist.name}" has no playable songs.`);
+    }
+
+    await stopActive(await getActiveState());
+    songs = playlistSongs;
+    activePlaylist = playlist.name;
+    selectedIndex = 0;
+    await startSelected();
+  }
+
   readline.emitKeypressEvents(process.stdin);
   process.stdin.setRawMode(true);
   process.stdin.resume();
@@ -208,7 +367,7 @@ export async function runInteractive() {
 
     const action = key.ctrl && key.name === "c" ? "q" : key.name;
 
-    if (!["p", "n", "b", "s", "q"].includes(action)) {
+    if (!["p", "n", "b", "s", "l", "q"].includes(action)) {
       return;
     }
 
@@ -223,6 +382,8 @@ export async function runInteractive() {
         await changeTrack(-1);
       } else if (action === "s") {
         await stopActive(await getActiveState());
+      } else if (action === "l") {
+        await openPlaylistMenu();
       } else {
         await quit();
         return;
